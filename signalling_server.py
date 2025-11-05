@@ -72,3 +72,15 @@ async def delete_answer(prefix: str, room_id: str):
 @app.get("/health", tags=["health"])
 async def healthcheck():
     return {"status": "ok"}
+
+
+@app.get("/{prefix}/health", tags=["health"])
+async def prefix_health(prefix: str):
+    _validate_prefix(prefix)
+    return {"status": "ok"}
+
+
+@app.get("/{prefix}/{room_id}/health", tags=["health"])
+async def room_health(prefix: str, room_id: str):
+    _validate_prefix(prefix)
+    return {"status": "ok", "room": room_id}

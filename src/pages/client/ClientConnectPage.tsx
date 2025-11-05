@@ -155,6 +155,8 @@ const ClientConnectPage = () => {
     autoActiveRef.current = true;
     let cancelled = false;
     const base = signallingUrlParam.replace(/\/$/, '');
+    const lastSlash = base.lastIndexOf('/');
+    const prefixBase = lastSlash > 0 ? base.substring(0, lastSlash) : base;
 
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -163,6 +165,18 @@ const ClientConnectPage = () => {
       setAutoMessage('Retrieving offer from signalling server...');
 
       try {
+        const verifyHealth = async () => {
+          const prefixHealth = await fetch(`${prefixBase}/health`);
+          if (!prefixHealth.ok) {
+            throw new Error(`Signalling health failed (${prefixHealth.status})`);
+          }
+          const roomHealth = await fetch(`${base}/health`);
+          if (!roomHealth.ok) {
+            throw new Error(`Room health failed (${roomHealth.status})`);
+          }
+        };
+
+        await verifyHealth();
         let offerText = '';
         while (!cancelled) {
           const offerResponse = await fetch(`${base}/offer`, { method: 'GET' });

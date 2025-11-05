@@ -247,12 +247,24 @@ export const ServerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const roomUrl = `${normalizedBase}/${roomId}`;
       const offerUrl = `${roomUrl}/offer`;
 
-    try {
-      const response = await fetch(offerUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: offerJson,
-      });
+      const checkHealth = async () => {
+        const prefixHealth = await fetch(`${normalizedBase}/health`);
+        if (!prefixHealth.ok) {
+          throw new Error(`Signalling health failed (${prefixHealth.status})`);
+        }
+        const roomHealth = await fetch(`${roomUrl}/health`);
+        if (!roomHealth.ok) {
+          throw new Error(`Room health failed (${roomHealth.status})`);
+        }
+      };
+
+      try {
+        await checkHealth();
+        const response = await fetch(offerUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: offerJson,
+        });
         if (!response.ok) {
           throw new Error(`Offer publish failed (${response.status})`);
         }
@@ -261,7 +273,6 @@ export const ServerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const shareBase = `${window.location.origin}?clientonly=true&signalling_url=${encodeURIComponent(roomUrl)}`;
         setSignallingShareUrl(shareBase);
         setSignallingError(null);
-        acceptAnswerRef.current = acceptAnswer;
         startAnswerPolling();
       } catch (error) {
         console.error('Failed to publish offer to signalling server', error);
@@ -384,6 +395,43 @@ export const ServerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const startSequence = useCallback(() => {
     startStage('prepare');
   }, [startStage]);
+
+  const generateOffer = useCallback(async () => {
+    try {
+      const offer = await serverManagerRef.current?.createOffer();
+      if (offer) {
+        setCurrentOffer(offer);
+        currentOfferRef.current = offer;
+        void publishOfferToSignalling(offer.peerId, offer.sdp);
+        return offer;
+      }
+    } catch (error) {
+      console.error('Failed to create offer', error);
+    }
+    return null;
+  }, [publishOfferToSignalling]);
+
+  const acceptAnswer = useCallback(async (peerId: string, answerSdp: string) => {
+    if (!peerId || !answerSdp) {
+      return;
+    }
+    const finalize = () => {
+      setCurrentOffer(null);
+      currentOfferRef.current = null;
+      activeSignallingPeerRef.current = null;
+      if (!settingsRef.current.signallingBaseUrl.trim()) {
+        void generateOffer();
+      }
+    };
+    try {
+      await serverManagerRef.current?.acceptAnswer(peerId, answerSdp);
+      console.info('Accepted answer from peer', peerId);
+    } catch (error) {
+      console.error('Failed to accept answer', error);
+    } finally {
+      finalize();
+    }
+  }, [generateOffer]);
 
   const updateSettingsHandler = useCallback((partial: Partial<ServerSettings>) => {
     setSettings((prev) => {
@@ -529,21 +577,6 @@ export const ServerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     [continueStage, goToStage, startSequence, verifyAdminPeer],
   );
 
-  const generateOffer = useCallback(async () => {
-    try {
-      const offer = await serverManagerRef.current?.createOffer();
-      if (offer) {
-        setCurrentOffer(offer);
-        currentOfferRef.current = offer;
-        void publishOfferToSignalling(offer.peerId, offer.sdp);
-        return offer;
-      }
-    } catch (error) {
-      console.error('Failed to create offer', error);
-    }
-    return null;
-  }, [publishOfferToSignalling]);
-
   useEffect(() => {
     const manager = serverManagerRef.current;
     if (!manager) {
@@ -577,28 +610,6 @@ export const ServerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       manager.setPeerDisconnectedHandler(undefined);
     };
   }, [generateOffer, handleClientAction]);
-
-  const acceptAnswer = useCallback(async (peerId: string, answerSdp: string) => {
-    if (!peerId || !answerSdp) {
-      return;
-    }
-    const finalize = () => {
-      setCurrentOffer(null);
-      currentOfferRef.current = null;
-      activeSignallingPeerRef.current = null;
-      if (!settingsRef.current.signallingBaseUrl.trim()) {
-        void generateOffer();
-      }
-    };
-    try {
-      await serverManagerRef.current?.acceptAnswer(peerId, answerSdp);
-      console.info('Accepted answer from peer', peerId);
-    } catch (error) {
-      console.error('Failed to accept answer', error);
-    } finally {
-      finalize();
-    }
-  }, [generateOffer]);
 
   useEffect(() => {
     if (serverInitialized && !currentOffer) {
