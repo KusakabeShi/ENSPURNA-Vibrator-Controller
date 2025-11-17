@@ -18,6 +18,7 @@ import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, Tuple
+from urllib.parse import urlparse
 
 PREFIX = "sig"
 TTL_SECONDS = 60 * 60 * 24  # Placeholder if you want to expire entries later
@@ -26,8 +27,13 @@ offers: Dict[str, str] = {}
 answers: Dict[str, str] = {}
 
 
+def _path_segments(raw_path: str) -> list[str]:
+    parsed = urlparse(raw_path)
+    return [segment for segment in parsed.path.split('/') if segment]
+
+
 def parse_path(path: str) -> Tuple[str, str, str]:
-    parts = [segment for segment in path.split('/') if segment]
+    parts = _path_segments(path)
     if len(parts) != 3:
         raise ValueError('Invalid path')
     prefix, room_id, resource = parts
@@ -44,20 +50,44 @@ def read_body(handler: BaseHTTPRequestHandler) -> str:
 
 
 class SignallingHandler(BaseHTTPRequestHandler):
-    def _set_headers(self, status: int, headers: Dict[str, str] | None = None) -> None:
+    CORS_HEADERS = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Allow-Headers': '*',
+        'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
+    }
+
+    def _set_headers(
+        self,
+        status: int,
+        *,
+        content_type: str = 'text/plain; charset=utf-8',
+        headers: Dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
-        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Type', content_type)
+        for key, value in self.CORS_HEADERS.items():
+            self.send_header(key, value)
         if headers:
             for key, value in headers.items():
                 self.send_header(key, value)
         self.end_headers()
 
+    def _write_detail(
+        self,
+        status: HTTPStatus,
+        message: str,
+        *,
+        headers: Dict[str, str] | None = None,
+    ) -> None:
+        self._set_headers(status, content_type='application/json; charset=utf-8', headers=headers)
+        self.wfile.write(json.dumps({'detail': message}).encode('utf-8'))
+
     def _handle(self, method: str) -> None:
         try:
             _, room_id, resource = parse_path(self.path)
         except ValueError as exc:
-            self._set_headers(HTTPStatus.NOT_FOUND)
-            self.wfile.write(str(exc).encode('utf-8'))
+            self._write_detail(HTTPStatus.NOT_FOUND, str(exc))
             return
 
         key = f"{resource}:{room_id}"
@@ -70,8 +100,8 @@ class SignallingHandler(BaseHTTPRequestHandler):
         if method == 'PUT':
             body = read_body(self)
             if not body:
-                self._set_headers(HTTPStatus.BAD_REQUEST)
-                self.wfile.write(b'Empty body')
+                message = 'Offer body is empty' if resource == 'offer' else 'Answer body is empty'
+                self._write_detail(HTTPStatus.BAD_REQUEST, message)
                 return
             store[key] = body
             self._set_headers(HTTPStatus.NO_CONTENT)
@@ -80,10 +110,9 @@ class SignallingHandler(BaseHTTPRequestHandler):
         if method == 'GET' and resource == 'offer':
             value = store.get(key)
             if value is None:
-                self._set_headers(HTTPStatus.NOT_FOUND)
-                self.wfile.write(b'Not found')
+                self._write_detail(HTTPStatus.NOT_FOUND, 'Offer not found')
                 return
-            self._set_headers(HTTPStatus.OK, {'Content-Type': 'application/json'})
+            self._set_headers(HTTPStatus.OK)
             self.wfile.write(value.encode('utf-8'))
             return
 
@@ -92,32 +121,36 @@ class SignallingHandler(BaseHTTPRequestHandler):
             if value is None:
                 self._set_headers(HTTPStatus.NO_CONTENT)
                 return
-            self._set_headers(HTTPStatus.OK, {'Content-Type': 'application/json'})
+            self._set_headers(HTTPStatus.OK)
             self.wfile.write(value.encode('utf-8'))
             return
 
-        self._set_headers(HTTPStatus.METHOD_NOT_ALLOWED, {'Allow': 'GET, PUT' if resource == 'offer' else 'PUT, DELETE'})
+        allow = 'GET, PUT' if resource == 'offer' else 'PUT, DELETE'
+        self._write_detail(
+            HTTPStatus.METHOD_NOT_ALLOWED,
+            'Method not allowed',
+            headers={'Allow': allow},
+        )
 
     def _health(self) -> None:
         try:
-            parts = [segment for segment in self.path.split('/') if segment]
+            parts = _path_segments(self.path)
             if len(parts) == 1 and parts[0] == 'health':
-                self._set_headers(HTTPStatus.OK, {'Content-Type': 'application/json'})
+                self._set_headers(HTTPStatus.OK, content_type='application/json; charset=utf-8')
                 self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
                 return
             if len(parts) == 2 and parts[0] == PREFIX and parts[1] == 'health':
-                self._set_headers(HTTPStatus.OK, {'Content-Type': 'application/json'})
+                self._set_headers(HTTPStatus.OK, content_type='application/json; charset=utf-8')
                 self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
                 return
             if len(parts) == 3 and parts[0] == PREFIX and parts[2] == 'health':
-                self._set_headers(HTTPStatus.OK, {'Content-Type': 'application/json'})
+                self._set_headers(HTTPStatus.OK, content_type='application/json; charset=utf-8')
                 self.wfile.write(json.dumps({'status': 'ok', 'room': parts[1]}).encode('utf-8'))
                 return
         except Exception as exc:  # noqa: B902
-            self._set_headers(HTTPStatus.BAD_REQUEST)
-            self.wfile.write(str(exc).encode('utf-8'))
+            self._write_detail(HTTPStatus.BAD_REQUEST, str(exc))
             return
-        self._set_headers(HTTPStatus.NOT_FOUND)
+        self._write_detail(HTTPStatus.NOT_FOUND, 'Not found')
 
     def do_PUT(self) -> None:  # noqa: N802 (base class API)
         self._handle('PUT')
@@ -131,6 +164,9 @@ class SignallingHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         self._handle('DELETE')
 
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        self._set_headers(HTTPStatus.NO_CONTENT)
+
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         # Reduce noise in console
         print(json.dumps({
@@ -143,8 +179,8 @@ class SignallingHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Simple signalling server (built-in libs only).')
-    parser.add_argument('--host', default='127.0.0.1')
-    parser.add_argument('--port', default=8000, type=int)
+    parser.add_argument('--host', default='0.0.0.0')
+    parser.add_argument('--port', default=5174, type=int)
     args = parser.parse_args()
 
     server = ThreadingHTTPServer((args.host, args.port), SignallingHandler)
