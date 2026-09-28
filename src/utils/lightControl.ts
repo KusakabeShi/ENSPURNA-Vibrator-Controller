@@ -1,26 +1,15 @@
 import type { ServerSettings } from '../state/types';
 
-const appendQuery = (url: string, params: Record<string, string | number>) => {
-  const hasQuery = url.includes('?');
-  const separator = hasQuery ? '&' : '?';
-  const search = Object.entries(params)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
-    .join('&');
-  return `${url}${separator}${search}`;
+export const isLightApiConfigured = (settings: ServerSettings) => {
+  return Boolean(settings.lightOnUrl.trim() && settings.lightOffUrl.trim());
 };
 
 export const buildApiUrl = (settings: ServerSettings, on: boolean) => {
-  const { apiEndpoint, apiKey } = settings;
-  if (!apiEndpoint) {
-    throw new Error('Missing API endpoint');
+  const url = (on ? settings.lightOnUrl : settings.lightOffUrl).trim();
+  if (!url) {
+    throw new Error(`Missing light ${on ? 'ON' : 'OFF'} URL`);
   }
-  if (!apiKey) {
-    throw new Error('Missing API key');
-  }
-  return appendQuery(apiEndpoint, {
-    apikey: apiKey,
-    value: on ? 1 : 0,
-  });
+  return url;
 };
 
 export const triggerLight = async (on: boolean, settings: ServerSettings) => {

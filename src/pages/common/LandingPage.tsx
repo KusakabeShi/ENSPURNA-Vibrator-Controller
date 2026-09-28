@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -8,6 +8,7 @@ import {
   CardHeader,
   Container,
   FormControlLabel,
+  MenuItem,
   Snackbar,
   Stack,
   Switch,
@@ -16,7 +17,10 @@ import {
 } from '@mui/material';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useServerContext } from '../../state/ServerContext';
-import { triggerLight } from '../../utils/lightControl';
+import { isLightApiConfigured, triggerLight } from '../../utils/lightControl';
+import type { LightApiPreset } from '../../state/types';
+import { BUILTIN_LIGHT_PRESETS } from '../../utils/defaults';
+import { loadLightPresets, saveLightPresets } from '../../utils/storage';
 
 const LandingPage = () => {
   const navigate = useNavigate();
@@ -63,8 +67,8 @@ const LandingPage = () => {
 
   const handleTestLight = useCallback(
     async (on: boolean) => {
-      if (!settings.apiEndpoint || !settings.apiKey) {
-        showMessage('Set API endpoint and key first.');
+      if (!isLightApiConfigured(settings)) {
+        showMessage('Set both ON and OFF URLs first.');
         return;
       }
       await triggerLight(on, settings);
@@ -72,6 +76,61 @@ const LandingPage = () => {
     },
     [settings, showMessage],
   );
+
+  const [savedPresets, setSavedPresets] = useState<LightApiPreset[]>(() => loadLightPresets());
+  const [presetName, setPresetName] = useState('');
+
+  // Highlight the preset whose URLs match the current settings, if any.
+  const matchingPresetKey = useMemo(() => {
+    const matches = (preset: LightApiPreset) =>
+      preset.onUrl === settings.lightOnUrl && preset.offUrl === settings.lightOffUrl;
+    const savedIndex = savedPresets.findIndex(matches);
+    if (savedIndex >= 0) {
+      return `saved:${savedIndex}`;
+    }
+    const builtinIndex = BUILTIN_LIGHT_PRESETS.findIndex(matches);
+    return builtinIndex >= 0 ? `builtin:${builtinIndex}` : '';
+  }, [savedPresets, settings.lightOffUrl, settings.lightOnUrl]);
+
+  const handleSelectPreset = useCallback(
+    (key: string) => {
+      const [source, indexRaw] = key.split(':');
+      const list = source === 'saved' ? savedPresets : BUILTIN_LIGHT_PRESETS;
+      const preset = list[Number(indexRaw)];
+      if (!preset) {
+        return;
+      }
+      updateSettings({ lightOnUrl: preset.onUrl, lightOffUrl: preset.offUrl });
+      if (source === 'saved') {
+        setPresetName(preset.name);
+      }
+    },
+    [savedPresets, updateSettings],
+  );
+
+  const handleSavePreset = useCallback(() => {
+    const name = presetName.trim();
+    if (!name || !isLightApiConfigured(settings)) {
+      return;
+    }
+    const preset = { name, onUrl: settings.lightOnUrl.trim(), offUrl: settings.lightOffUrl.trim() };
+    const next = [...savedPresets.filter((item) => item.name !== name), preset];
+    saveLightPresets(next);
+    setSavedPresets(next);
+    showMessage(`Saved preset "${name}".`);
+  }, [presetName, savedPresets, settings, showMessage]);
+
+  const handleDeletePreset = useCallback(() => {
+    if (!matchingPresetKey.startsWith('saved:')) {
+      return;
+    }
+    const index = Number(matchingPresetKey.split(':')[1]);
+    const removed = savedPresets[index];
+    const next = savedPresets.filter((_, i) => i !== index);
+    saveLightPresets(next);
+    setSavedPresets(next);
+    showMessage(`Deleted preset "${removed?.name}".`);
+  }, [matchingPresetKey, savedPresets, showMessage]);
 
   const navigateToClient = useCallback(() => {
     setClientSelectionError(null);
@@ -111,19 +170,70 @@ const LandingPage = () => {
             <CardHeader title="Server Setup" subheader="Configure the controller and start hosting." />
             <CardContent>
               <Stack spacing={2}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                  <TextField
+                    select
+                    label="Light API Preset"
+                    value={matchingPresetKey}
+                    onChange={(event) => handleSelectPreset(event.target.value)}
+                    helperText="Pick a template or a saved preset to fill the URLs below."
+                    fullWidth
+                  >
+                    <MenuItem value="" disabled>
+                      Custom
+                    </MenuItem>
+                    {BUILTIN_LIGHT_PRESETS.map((preset, index) => (
+                      <MenuItem key={`builtin:${index}`} value={`builtin:${index}`}>
+                        {preset.name}
+                      </MenuItem>
+                    ))}
+                    {savedPresets.map((preset, index) => (
+                      <MenuItem key={`saved:${index}`} value={`saved:${index}`}>
+                        {preset.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <Button
+                    color="error"
+                    onClick={handleDeletePreset}
+                    disabled={!matchingPresetKey.startsWith('saved:')}
+                    sx={{ alignSelf: { sm: 'flex-start' }, mt: { sm: 1 } }}
+                  >
+                    Delete
+                  </Button>
+                </Stack>
                 <TextField
-                  label="API Endpoint"
-                  value={settings.apiEndpoint}
-                  onChange={(event) => updateSettings({ apiEndpoint: event.target.value })}
-                  placeholder="http://192.168.66.238/api/relay/0"
+                  label="Light ON URL"
+                  value={settings.lightOnUrl}
+                  onChange={(event) => updateSettings({ lightOnUrl: event.target.value })}
+                  placeholder="http://192.168.66.90/cm?cmnd=Power%20On"
                   fullWidth
                 />
                 <TextField
-                  label="API Key"
-                  value={settings.apiKey}
-                  onChange={(event) => updateSettings({ apiKey: event.target.value })}
+                  label="Light OFF URL"
+                  value={settings.lightOffUrl}
+                  onChange={(event) => updateSettings({ lightOffUrl: event.target.value })}
+                  placeholder="http://192.168.66.90/cm?cmnd=Power%20Off"
                   fullWidth
                 />
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                  <TextField
+                    label="Preset Name"
+                    value={presetName}
+                    onChange={(event) => setPresetName(event.target.value)}
+                    placeholder="Bedroom Tasmota"
+                    helperText="Saving with an existing name overwrites it."
+                    fullWidth
+                  />
+                  <Button
+                    variant="outlined"
+                    onClick={handleSavePreset}
+                    disabled={!presetName.trim() || !isLightApiConfigured(settings)}
+                    sx={{ alignSelf: { sm: 'flex-start' }, mt: { sm: 1 }, whiteSpace: 'nowrap' }}
+                  >
+                    Save Preset
+                  </Button>
+                </Stack>
                 <TextField
                   label="Signalling Server Base URL"
                   value={settings.signallingBaseUrl}
@@ -154,14 +264,14 @@ const LandingPage = () => {
                   <Button
                     variant="contained"
                     onClick={() => handleTestLight(true)}
-                    disabled={!settings.apiEndpoint || !settings.apiKey}
+                    disabled={!isLightApiConfigured(settings)}
                   >
                     Test On
                   </Button>
                   <Button
                     variant="outlined"
                     onClick={() => handleTestLight(false)}
-                    disabled={!settings.apiEndpoint || !settings.apiKey}
+                    disabled={!isLightApiConfigured(settings)}
                   >
                     Test Off
                   </Button>

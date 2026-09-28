@@ -23,7 +23,7 @@ import {
   sampleLightOnThresholds,
   sampleStageDurationSeconds,
 } from '../utils/stageHelpers';
-import { triggerLight } from '../utils/lightControl';
+import { isLightApiConfigured, triggerLight } from '../utils/lightControl';
 
 interface ServerContextValue {
   settings: ServerSettings;
@@ -221,7 +221,7 @@ export const ServerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
 
       const latestSettings = settingsRef.current;
-      if (!latestSettings.apiEndpoint || !latestSettings.apiKey) {
+      if (!isLightApiConfigured(latestSettings)) {
         return;
       }
       await triggerLight(on, latestSettings);

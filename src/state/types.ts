@@ -3,11 +3,17 @@ import type { StageKey } from '../constants/stages';
 export type AppRole = 'server' | 'client-normal' | 'client-admin';
 
 export interface ServerSettings {
-  apiEndpoint: string;
-  apiKey: string;
+  lightOnUrl: string;
+  lightOffUrl: string;
   compatibleMode: boolean;
   compatibleDelaySeconds: number;
   signallingBaseUrl: string;
+}
+
+export interface LightApiPreset {
+  name: string;
+  onUrl: string;
+  offUrl: string;
 }
 
 export interface StageParameterValues {

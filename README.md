@@ -24,11 +24,13 @@ npm install
 npm run dev
 ```
 
-The dev server runs at `http://localhost:5173`. The first screen lets you configure the Enspurna HTTP API and choose between server mode or client mode.
+The dev server runs at `http://localhost:5173`. The first screen lets you configure the smart plug HTTP API and choose between server mode or client mode.
 
 ## Server Mode Workflow
 
-1. Enter the relay API endpoint/key and (optionally) a signalling base URL, e.g.
+1. Enter the full **Light ON URL** and **Light OFF URL** for your smart plug (GET requests), or pick a
+   built-in template (Espurna, Tasmota) and edit it. Use **Save Preset** to keep named URL pairs in a
+   cookie for reuse. Then (optionally) enter a signalling base URL, e.g.
    `http://host:port/sig`. Automatic mode is active whenever the field is non-empty.
 2. Click **Start Server Mode**. The init page opens.
 3. Configure stage timings.
